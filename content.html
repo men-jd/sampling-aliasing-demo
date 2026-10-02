@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sampling & Aliasing</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  html,body{
+    margin:0;width:100%;height:100%;background:#fff;
+    font-family:Segoe UI,Microsoft YaHei,Arial,sans-serif;overflow:hidden;
+  }
+  *{box-sizing:border-box}
+  .app{
+    width:100%;height:100%;display:flex;flex-direction:column;
+    padding:14px 16px 12px;gap:10px;background:#fff;
+  }
+  .controls{
+    display:grid;grid-template-columns:repeat(3,minmax(130px,1fr));
+    gap:14px;flex:0 0 auto;
+  }
+  .field label{
+    display:block;margin:0 0 5px;color:#40464d;
+    font-size:15px;font-weight:650;
+  }
+  .field input{
+    width:100%;height:40px;padding:0 10px;
+    border:1px solid #c9cfd7;border-radius:8px;
+    background:#fff;font-size:18px;color:#20252b;outline:none;
+  }
+  .field input:focus{
+    border-color:#64748b;
+    box-shadow:0 0 0 2px rgba(100,116,139,.12);
+  }
+  .plot-wrap{
+    flex:1 1 auto;min-height:300px;overflow:hidden;
+    border:1px solid #d8dde4;border-radius:10px;background:#fff;
+  }
+  svg{display:block;width:100%;height:100%}
+  .error{
+    height:18px;flex:0 0 18px;margin-top:-4px;
+    font-size:13px;color:#b42318;visibility:hidden;
+  }
+  @media(max-width:680px){
+    .controls{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="controls">
+    <div class="field">
+      <label for="f0">f₀ (Hz)</label>
+      <input id="f0" type="number" min="0.001" step="0.1" value="20">
+    </div>
+    <div class="field">
+      <label for="fs">fₛ (Hz)</label>
+      <input id="fs" type="number" min="0.001" step="0.1" value="100">
+    </div>
+    <div class="field">
+      <label for="fp">f′ (Hz)</label>
+      <input id="fp" type="number" min="0" step="0.1" value="80">
+    </div>
+  </div>
+
+  <div class="error" id="error"></div>
+
+  <div class="plot-wrap">
+    <svg id="plot" viewBox="0 0 1200 620" preserveAspectRatio="none"></svg>
+  </div>
+</div>
+
+<script>
+(function(){
+  const svg=document.getElementById('plot');
+  const error=document.getElementById('error');
+  const NS='http://www.w3.org/2000/svg';
+  const ids=['f0','fs','fp'];
+  const inputs=Object.fromEntries(ids.map(id=>[id,document.getElementById(id)]));
+
+  function val(id){return Number(inputs[id].value)}
+
+  function node(tag,attrs={}){
+    const el=document.createElementNS(NS,tag);
+    for(const [k,v] of Object.entries(attrs)) el.setAttribute(k,String(v));
+    return el;
+  }
+
+  function curvePath(freq,L,T,W,H,totalTime){
+    const pts=1800;
+    let d='';
+    for(let i=0;i<=pts;i++){
+      const t=totalTime*i/pts;
+      const x=L+W*i/pts;
+      const y=T+H/2-Math.cos(2*Math.PI*freq*t)*(H*.39);
+      d+=(i===0?'M':'L')+x.toFixed(2)+' '+y.toFixed(2)+' ';
+    }
+    return d;
+  }
+
+  function render(){
+    const f0=val('f0');
+    const fs=val('fs');
+    const fp=val('fp');
+
+    if(![f0,fs,fp].every(Number.isFinite) || f0<=0 || fs<=0 || fp<0){
+      error.textContent='请输入有效频率';
+      error.style.visibility='visible';
+      return;
+    }
+    error.style.visibility='hidden';
+
+    svg.replaceChildren();
+
+    const VW=1200,VH=620;
+    const m={l:58,r:20,t:22,b:34};
+    const L=m.l,T=m.t;
+    const W=VW-m.l-m.r;
+    const H=VH-m.t-m.b;
+    const y0=T+H/2;
+
+    const T0=1/f0;
+    const totalTime=3*T0;
+
+    // horizontal guides
+    [-1,0,1].forEach(v=>{
+      const y=y0-v*(H*.39);
+      svg.appendChild(node('line',{
+        x1:L,y1:y,x2:L+W,y2:y,
+        stroke:v===0?'#aeb6c0':'#edf0f3',
+        'stroke-width':v===0?1.6:1
+      }));
+    });
+
+    // period separators
+    [1,2].forEach(k=>{
+      const x=L+W*(k/3);
+      svg.appendChild(node('line',{
+        x1:x,y1:T,x2:x,y2:T+H,
+        stroke:'#e5e9ee','stroke-width':1.2,
+        'stroke-dasharray':'5 7'
+      }));
+    });
+
+    // candidate f' curve first
+    svg.appendChild(node('path',{
+      d:curvePath(fp,L,T,W,H,totalTime),
+      fill:'none',
+      stroke:'#ff7f0e',
+      'stroke-width':2.8,
+      'stroke-opacity':0.92,
+      'stroke-linecap':'round',
+      'stroke-linejoin':'round'
+    }));
+
+    // original f0 curve, more prominent
+    svg.appendChild(node('path',{
+      d:curvePath(f0,L,T,W,H,totalTime),
+      fill:'none',
+      stroke:'#1f5fbf',
+      'stroke-width':4.6,
+      'stroke-opacity':1,
+      'stroke-linecap':'round',
+      'stroke-linejoin':'round'
+    }));
+
+    // sample points and stems based on f0
+    const nMax=Math.floor(totalTime*fs+1e-10);
+
+    for(let n=0;n<=nMax;n++){
+      const t=n/fs;
+      if(t>totalTime+1e-12) continue;
+
+      const x=L+(t/totalTime)*W;
+      const y0s=y0-Math.cos(2*Math.PI*f0*t)*(H*.39);
+      const yps=y0-Math.cos(2*Math.PI*fp*t)*(H*.39);
+
+      // stem to original sample point
+      svg.appendChild(node('line',{
+        x1:x,y1:y0,x2:x,y2:y0s,
+        stroke:'#d62728',
+        'stroke-width':2.0,
+        'stroke-opacity':0.65
+      }));
+
+      // white halo
+      svg.appendChild(node('circle',{
+        cx:x,cy:y0s,r:8.0,fill:'#fff','fill-opacity':0.96
+      }));
+
+      // original sample point
+      svg.appendChild(node('circle',{
+        cx:x,cy:y0s,r:5.8,
+        fill:'#d62728',
+        stroke:'#b51f20',
+        'stroke-width':1.1
+      }));
+
+      // If f' sample differs, draw a small orange ring at its own sampled value.
+      // If aliasing makes them equal, the ring will sit exactly around the red point.
+      svg.appendChild(node('circle',{
+        cx:x,cy:yps,r:8.3,
+        fill:'none',
+        stroke:'#ff7f0e',
+        'stroke-width':2.2,
+        'stroke-opacity':0.95
+      }));
+    }
+  }
+
+  ids.forEach(id=>inputs[id].addEventListener('input',render));
+  render();
+
+  if(window.Office&&Office.onReady){Office.onReady(()=>{});}
+})();
+</script>
+</body>
+</html>
